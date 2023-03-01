@@ -691,8 +691,11 @@ def main(args):
     dropout = params.dropout
     epochs = params.epochs
     window = params.window
+    seq_len = params.seq_len
     batch_size = params.batch_size
     lr = params.lr
+    n_layers = params.n_layers
+    clip = params.clip
 
     # Extract vocab and words
     [train_vocab,train_words,train] = read_encode(train_name,[],{},[],3)
