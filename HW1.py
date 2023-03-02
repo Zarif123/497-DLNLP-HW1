@@ -571,7 +571,7 @@ def ffnn_test_model(model, dataloader, words, threshold):
 
   acc = accuracy_score(np.array(truth), np.array(preds))
   confusion_mat = confusion_matrix(truth, preds)
-  disp = ConfusionMatrixDisplay(confusion_matrix=confusion_mat, display_labels=["REAL", "FAKE"])
+  disp = ConfusionMatrixDisplay(confusion_matrix=confusion_mat, display_labels=["FAKE", "REAL"])
   disp.plot()
   plt.show()
   print(f"Test Accuracy: {acc}")
@@ -617,22 +617,46 @@ def lstm_test_model(model, test_sequences, test_words):
 
   return acc
 
-class Params:
-    def __init__(self, **kwargs):
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-            
-model_map = {0: 'FFNN', 1: 'LSTM', 2: 'FFNN_CLASSIFY', 3: 'LSTM_CLASSIFY'}
-train_map = {0: 'data/real.train.tok', 1: 'data/fake.train.tok', 2: 'data/mix.train.tok'}
-valid_map = {0: 'data/real.valid.tok', 1: 'data/fake.valid.tok', 2: 'data/mix.valid.tok'}
-test_map = {0: 'data/real.test.tok', 1: 'data/fake.test.tok', 2: 'data/mix.test.tok', 3: 'data/blind.test.tok'}
+def lstm_blind_test_model(model, test_sequences, words):
+    print("Starting Blind Test")
 
-model_type = model_map[0]
+    hc = (
+        torch.randn(model.n_layers, 1, model.d_hidden).to(device),
+        torch.randn(model.n_layers, 1, model.d_hidden).to(device),
+    )
 
-# Types of data
-train_type = train_map[2]
-valid_type = valid_map[2]
-test_type = test_map[2]
+    fake_val = words["[FAKE]"][0]
+    real_val = words["[REAL]"][0]
+    end_val = words["end_bio"][0]
+
+    preds = []
+    num_sequences = len(test_sequences)
+
+    for idx, (input, output) in enumerate(test_sequences):
+        if idx % 2000 == 0:
+            print("Testing Sequence:", idx, "/", num_sequences)
+
+        hc = model.detach_hidden(hc)
+
+        logits, hc = model(input, hc)
+        # probs = torch.softmax(logits, dim=1)
+        log_soft = nn.LogSoftmax(dim=1)
+        probs = log_soft(logits)
+
+        end_list = (input == end_val)
+        prediction_indices = end_list.nonzero()
+
+        for i in prediction_indices:
+            if probs[i, real_val] > probs[i, fake_val]:
+                preds.append("[REAL]")
+            else:
+                preds.append("[FAKE]")
+
+    preds_df = pd.DataFrame(preds, columns=["Blind Predictions"])
+    preds_df.to_csv('blind_predictions.csv', index=False)
+
+    return preds
+
 
 # FFNN Args:
 # args = {
@@ -656,137 +680,143 @@ test_type = test_map[2]
 # }
 
 # LSTM Args:
-args = {
-    "d_model": 512,
-    "d_hidden": 512,
-    "n_layers": 2,
-    "batch_size": 64,
-    "seq_len": 30,
-    "printevery": 5000,
-    "window": 3,
-    "epochs": 30,
-    "lr": 0.00001,
-    "dropout": 0.35,
-    "clip": 2.0,
-    "model": model_type,
-    "savename": model_type.lower(),
-    "loadname": model_type.lower(),
-    "trainname": train_type,
-    "validname": valid_type,
-    "testname": test_type
-}
+# args = {
+#     "d_model": 512,
+#     "d_hidden": 512,
+#     "n_layers": 2,
+#     "batch_size": 64,
+#     "seq_len": 30,
+#     "printevery": 5000,
+#     "window": 3,
+#     "epochs": 30,
+#     "lr": 0.00001,
+#     "dropout": 0.35,
+#     "clip": 2.0,
+#     "model": model_type,
+#     "savename": model_type.lower(),
+#     "loadname": model_type.lower(),
+#     "trainname": train_type,
+#     "validname": valid_type,
+#     "testname": test_type
+# }
 
 # Main Function
-def main(args): 
+def main(): 
+
+    # LSTM Params
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d_model', type=int, default=512)
+    parser.add_argument('-d_hidden', type=int, default=512)
+    parser.add_argument('-n_layers', type=int, default=2)
+    parser.add_argument('-batch_size', type=int, default=64)
+    parser.add_argument('-seq_len', type=int, default=30)
+    parser.add_argument('-printevery', type=int, default=5000)
+    parser.add_argument('-window', type=int, default=3)
+    parser.add_argument('-epochs', type=int, default=20)
+    parser.add_argument('-lr', type=float, default=0.0001)
+    parser.add_argument('-dropout', type=int, default=0.35)
+    parser.add_argument('-clip', type=int, default=2.0)
+    parser.add_argument('-model', type=str,default='LSTM')
+    parser.add_argument('-savename', type=str,default='lstm')
+    parser.add_argument('-loadname', type=str)
+    parser.add_argument('-trainname', type=str,default='wiki.train.txt')
+    parser.add_argument('-validname', type=str,default='wiki.valid.txt')
+    parser.add_argument('-testname', type=str,default='wiki.test.txt')
+
+    params = parser.parse_args()    
     torch.manual_seed(0)
-    
-    # params
-    params = Params(**args)
-    train_name = params.trainname
-    valid_name = params.validname
-    test_name = params.testname
-    model_type = params.model
-    d_model = params.d_model
-    d_hidden = params.d_hidden
-    dropout = params.dropout
-    epochs = params.epochs
-    window = params.window
-    seq_len = params.seq_len
-    batch_size = params.batch_size
-    lr = params.lr
-    n_layers = params.n_layers
-    clip = params.clip
 
     # Extract vocab and words
-    [train_vocab,train_words,train] = read_encode(train_name,[],{},[],3)
+    [train_vocab,train_words,train] = read_encode(params.trainname,[],{},[],3)
     train_data = torch.tensor(train)
 
-    [valid_vocab,valid_words,valid] = read_encode(valid_name,[],{},[],3)
+    [valid_vocab,valid_words,valid] = read_encode(params.validname,train_vocab,train_words,[],-1)
     valid_data = torch.tensor(valid)
 
-    [test_vocab,test_words,test] = read_encode(test_name,[],{},[],3)
+    [test_vocab,test_words,test] = read_encode(params.testname,train_vocab,train_words,[],-1)
     test_data = torch.tensor(test)
     
-    if model_type == 'FFNN':
+    if params.model == 'FFNN':
 
       # Process Train Data
       train_bios = split_bios(train_data, train_words)
       train_bios = clean_bios(train_bios, train_words)
-      train_ngrams_data = create_ngrams(train_bios, train_words, window)
+      train_ngrams_data = create_ngrams(train_bios, train_words, params.window)
 
       train_ngram_dataset = NgramDataset(train_ngrams_data)
-      train_ngram_dataloader = DataLoader(train_ngram_dataset, batch_size=batch_size)
+      train_ngram_dataloader = DataLoader(train_ngram_dataset, batch_size=params.batch_size)
 
       # Process Valid Data
       valid_bios = split_bios(valid_data, valid_words)
       valid_bios = clean_bios(valid_bios, valid_words)
-      valid_ngrams_data = create_ngrams(valid_bios, valid_words, window)
+      valid_ngrams_data = create_ngrams(valid_bios, valid_words, params.window)
 
       valid_ngram_dataset = NgramDataset(valid_ngrams_data)
-      valid_ngram_dataloader = DataLoader(valid_ngram_dataset, batch_size=batch_size)
+      valid_ngram_dataloader = DataLoader(valid_ngram_dataset, batch_size=params.batch_size)
 
-      ngram_model = FFNN(train_vocab, train_words, d_model, d_hidden, dropout, window).to(device)
-      optimizer = torch.optim.Adam(ngram_model.parameters(), lr=lr)
+      ngram_model = FFNN(train_vocab, train_words, params.d_model, params.d_hidden, params.dropout, params.window).to(device)
+      optimizer = torch.optim.Adam(ngram_model.parameters(), lr=params.lr)
       criterion = nn.NLLLoss()
       scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.1, patience=0)
 
-      ffnn_train_loop(ngram_model, optimizer, criterion, scheduler, train_ngram_dataloader, valid_ngram_dataloader, epochs)
+      ffnn_train_loop(ngram_model, optimizer, criterion, scheduler, train_ngram_dataloader, valid_ngram_dataloader, params.epochs)
 
       torch.save(ngram_model.state_dict(), 'ffnn.pth')
 
 
-    if model_type == 'LSTM':
+    if params.model == 'LSTM':
         # Process Train Data
       clean_train_data = clean_data(train_data, train_words)
-      train_sequences = create_sequences(clean_train_data, train_words, seq_len)
+      train_sequences = create_sequences(clean_train_data, train_words, params.seq_len)
       train_lstm_dataset = NgramDataset(train_sequences)
-      train_lstm_dataloader = DataLoader(train_lstm_dataset, batch_size=batch_size, drop_last=True)
+      train_lstm_dataloader = DataLoader(train_lstm_dataset, batch_size=params.batch_size, drop_last=True)
 
       # Process Valid Data
       clean_valid_data = clean_data(valid_data, valid_words)
-      valid_sequences = create_sequences(clean_valid_data, valid_words, seq_len)
+      valid_sequences = create_sequences(clean_valid_data, valid_words, params.seq_len)
       valid_lstm_dataset = NgramDataset(valid_sequences)
-      valid_lstm_dataloader = DataLoader(valid_lstm_dataset, batch_size=batch_size, drop_last=True)
+      valid_lstm_dataloader = DataLoader(valid_lstm_dataset, batch_size=params.batch_size, drop_last=True)
 
       # Create and Train LSTM Model
-      lstm_model = LSTM(train_vocab, train_words, d_model, d_hidden, n_layers, dropout, seq_len).to(device)
-      optimizer = torch.optim.Adam(lstm_model.parameters(), lr=lr)
+      lstm_model = LSTM(train_vocab, train_words, params.d_model, params.d_hidden, params.n_layers, params.dropout, params.seq_len).to(device)
+      optimizer = torch.optim.Adam(lstm_model.parameters(), lr=params.lr)
       criterion = nn.CrossEntropyLoss()
 
-      lstm_train_loop(lstm_model, optimizer, criterion, train_lstm_dataloader, valid_lstm_dataloader, batch_size, clip, epochs)
+      lstm_train_loop(lstm_model, optimizer, criterion, train_lstm_dataloader, valid_lstm_dataloader, params.batch_size, params.clip, params.epochs)
 
       torch.save(lstm_model.state_dict(), 'lstm.pth')
 
-    if model_type == 'FFNN_CLASSIFY':
+    if params.model == 'FFNN_CLASSIFY':
       valid_bios = split_bios(valid_data, valid_words)
       valid_bios = clean_bios(valid_bios, valid_words)
-      valid_ngrams_data = create_ngrams(valid_bios, valid_words, window)
+      valid_ngrams_data = create_ngrams(valid_bios, valid_words, params.window)
 
       valid_ngram_dataset = NgramDataset(valid_ngrams_data)
       valid_ngram_dataloader = DataLoader(valid_ngram_dataset, batch_size=1)
 
       test_bios = split_bios(test_data, test_words)
       test_bios = clean_bios(test_bios, test_words)
-      test_ngrams_data = create_ngrams(test_bios, test_words, window)
+      test_ngrams_data = create_ngrams(test_bios, test_words, params.window)
 
       test_ngram_dataset = NgramDataset(test_ngrams_data)
       test_ngram_dataloader = DataLoader(test_ngram_dataset, batch_size=1)
 
-      ngram_model = FFNN(train_vocab, train_words, d_model, d_hidden, dropout, window).to(device)
+      ngram_model = FFNN(train_vocab, train_words, params.d_model, params.d_hidden, params.dropout, params.window).to(device)
       ngram_model.load_state_dict(torch.load('ffnn.pth', map_location=torch.device('cpu')))
       ngram_model.eval()
         
-      create_histogram(ngram_model, valid_ngram_dataloader, window, valid_words)
+      create_histogram(ngram_model, valid_ngram_dataloader, params.window, valid_words)
       threshold = 4500
       ffnn_test_model(ngram_model, test_ngram_dataloader, test_words, threshold)
-    if model_type == 'LSTM_CLASSIFY':
-      loaded_lstm_model = LSTM(train_vocab, train_words, d_model, d_hidden, n_layers, dropout, seq_len).to(device)
-      loaded_lstm_model.load_state_dict(torch.load('lstm4.pth', map_location=torch.device('cpu')))
+    
+    if params.model == 'LSTM_CLASSIFY':
+      loaded_lstm_model = LSTM(train_vocab, train_words, params.d_model, params.d_hidden, params.n_layers, params.dropout, params.seq_len).to(device)
+      loaded_lstm_model.load_state_dict(torch.load('lstm2.pth', map_location=torch.device('cpu')))
       loaded_lstm_model.eval()
 
       # Process Test Data
       clean_test_data = clean_data(test_data, test_words)
-      test_sequences = create_sequences(clean_test_data, train_words, seq_len)
+      test_sequences = create_sequences(clean_test_data, train_words, params.seq_len)
       # clean_test_data = clean_data(test_data, test_words)
       # test_sequences = create_sequences(clean_test_data, test_words, seq_len)
 
@@ -794,5 +824,10 @@ def main(args):
       accuracy = lstm_test_model(loaded_lstm_model, test_sequences, test_words)
       print(accuracy)
 
+      # # Blind LSTM Model
+      # blind_preds = lstm_blind_test_model(loaded_lstm_model, test_sequences, test_words)
+      # print(blind_preds)
 
-main(args)
+
+if __name__ == "__main__":
+    main()
