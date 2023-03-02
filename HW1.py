@@ -811,7 +811,7 @@ def main():
     
     if params.model == 'LSTM_CLASSIFY':
       loaded_lstm_model = LSTM(train_vocab, train_words, params.d_model, params.d_hidden, params.n_layers, params.dropout, params.seq_len).to(device)
-      loaded_lstm_model.load_state_dict(torch.load('lstm2.pth', map_location=torch.device('cpu')))
+      loaded_lstm_model.load_state_dict(torch.load('lstm.pth', map_location=torch.device('cpu')))
       loaded_lstm_model.eval()
 
       # Process Test Data
